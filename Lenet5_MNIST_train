@@ -1,0 +1,123 @@
+# -*- coding: utf-8 -*-
+import torch
+import torchvision
+from torch import nn,optim
+import torch.nn.functional as F
+from torch.autograd import Variable
+from torch.utils.data import DataLoader
+from torchvision import transforms
+from torchvision import datasets
+
+import matplotlib.pyplot as plt
+import numpy as np
+import time
+
+#是否使用GPU训练
+if_use_gpu = 1
+#配置参数
+torch.manual_seed(1) #设置随机数种子，确保结果可重复
+batch_size = 512
+learning_rate = 0.01
+num_epoches = 100 #训练次数
+len_data = 60000
+train_path = r'C:/Users/WangYisi/Desktop/lenet_mnist/mnist_train/'
+
+#使用自己准备的本地数据集进行训练
+def loadtraindata(path):    #r"/home/********/folder/train" 
+    trainset = torchvision.datasets.ImageFolder(path,
+                                                transform=transforms.Compose([      #如果有图片resize的需求请查找方法
+                                                    transforms.ToTensor()])
+                                                )
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,     #batch_size
+                                              shuffle=True,      #shuffle每个epoch都将数据重新洗牌
+                                              num_workers = 8,   #多线程，增加速度
+                                              pin_memory=True)   #使用锁页内存（内存较多模型较小时可以开启）
+    return trainloader
+
+def loadtestdata(path):    #r"/home/********/folder/test"
+    testset = torchvision.datasets.ImageFolder(path,
+                                                transform=transforms.Compose([
+                                                    transforms.ToTensor()])
+                                                )
+    testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
+                                             shuffle=True)
+    return testloader
+
+#classes = ('0','1','2','3','4','5','6','7','8','9')
+#定义卷积神经网络模型
+class LeNet(nn.Module):
+    def __init__(self):
+        super(LeNet, self).__init__()
+        self.conv = nn.Sequential(     #input_size=(1*28*28)
+            nn.Conv2d(3, 6, 5, stride=1, padding=2),   #in_dim = 1输入的维度是1,6个卷积核，5*5大小，步长为1，padding=2保证输入输出尺寸相同
+            nn.ReLU(),      #input_size=(6*28*28)
+            nn.MaxPool2d(kernel_size=2, stride=2),#output_size=(6*14*14)
+            nn.Conv2d(6, 16, 5, stride=1, padding=0),
+            nn.ReLU(),      #input_size=(16*10*10)
+            nn.MaxPool2d(kernel_size=2, stride=2)  #output_size=(16*5*5)
+        )
+        self.fc = nn.Sequential(
+            nn.Linear(16*5*5, 120),  #第一个参数可以直接填数字，用乘式更容易体现怎么得来的
+            nn.ReLU(),
+            nn.Linear(120, 84),
+            nn.ReLU(),
+            nn.Linear(84, 10)  #最终输出10类
+        )    
+    def forward(self, x):
+        x = self.conv(x)
+        # nn.Linear()的输入输出都是维度为1的值，所以要把多维度的tensor展平成一维
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
+#模型的训练
+def train():
+    #载入数据集
+    trainloader = loadtraindata(train_path)
+    #载入定义的网络结构
+    model = LeNet()
+    print(model)
+    #是否使用GPU进行计算
+    if if_use_gpu:
+        model = model.cuda()
+    optimizer = optim.SGD(model.parameters(), lr = learning_rate, momentum=0.9)   # 学习率为0.001
+    criterion = nn.CrossEntropyLoss()   # 损失函数:交叉熵损失函数
+    # 训练部分
+    for epoch in range(num_epoches):    
+        since = time.time()
+        running_loss = 0.0  # 定义一个变量方便我们对loss进行输出
+        running_acc = 0.0
+        for i, data in enumerate(trainloader, 0):  # 这里我们遇到了第一步中出现的trailoader，代码传入数据
+            # enumerate是python的内置函数，既获得索引也获得数据
+            # get the inputs
+            inputs, labels = data  # data是从enumerate返回的data，包含数据和标签信息，分别赋值给inputs和labels
+            # wrap them in Variable
+            inputs, labels = Variable(inputs), Variable(labels)  # 转换数据格式用Variable
+            if if_use_gpu:
+                inputs = inputs.cuda()
+                labels = labels.cuda()
+            optimizer.zero_grad()        # 梯度置零，因为反向传播过程中梯度会累加上一次循环的梯度
+            # forward + backward + optimize
+            outputs = model(inputs)        # 把数据输进CNN网络模型
+            loss = criterion(outputs, labels)  # 计算损失值
+            running_loss += loss.data * labels.size(0)   #total loss，由于loss是batch取均值的，需要把batch size乘回去
+            _,pred = torch.max(outputs,1)  #预测结果
+#            pred = pred.cuda()
+            num_correct = (pred == labels).sum()  #正确结果的数量
+            running_acc += num_correct.item()  #正确结果的总数#######原方法为.data()[0]，版本升级
+            #反向传播训练
+            optimizer.zero_grad()    #梯度清零，以免影响其他batch
+            loss.backward()          # loss反向传播
+            optimizer.step()         # 反向传播后参数更新 
+#        print('Train{} epoch,Loss:{:.6f},Acc:{:.6f}'.format(epoch + 1,
+#              running_loss/len_data,running_acc/len_data))
+        print("[%d/%d] Loss: %.5f, Acc: %.2f, Time: %.1f s" %(epoch+1, num_epoches, running_loss/len_data, 100*running_acc/len_data, time.time()-since))
+
+    print('Finished Training')
+    # 保存神经网络
+    model = model.cpu()
+    torch.save(model, 'lenet5.pkl')                      # 保存整个神经网络的结构和模型参数
+    torch.save(model.state_dict(), 'lenet5_params.pkl')  # 只保存神经网络的模型参数
+
+if __name__ == "__main__":
+    train()
